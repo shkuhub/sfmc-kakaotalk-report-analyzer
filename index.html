@@ -6,6 +6,7 @@
 <title>Abandon Cart 성과 트래커</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <style>
 :root {
   --bg: #ffffff;
@@ -134,7 +135,21 @@ body {
   overflow: hidden;
   margin-bottom: 16px;
   border: 1px solid var(--border);
+  position: relative;
 }
+/* 우클릭 힌트 */
+.tcard::after {
+  content: '우클릭하면 스크린샷 복사';
+  position: absolute;
+  top: 14px; right: 16px;
+  font-size: 10px;
+  color: var(--text3);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.tcard:hover::after { opacity: 1; }
+
 .tcard-head {
   padding: 14px 20px;
   display: flex; align-items: center; gap: 8px;
@@ -232,6 +247,39 @@ tbody tr.computed-row td.td-summary { background: var(--bg3); }
   opacity: 0; z-index: 9999; pointer-events: none;
 }
 .toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+
+/* ── Context Menu ────────────────────────── */
+.ctx-menu {
+  position: fixed;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+  padding: 6px;
+  z-index: 9000;
+  min-width: 180px;
+  display: none;
+}
+.ctx-menu.visible { display: block; }
+.ctx-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 14px;
+  border-radius: 7px;
+  font-size: 13px; font-weight: 500; color: var(--text);
+  cursor: pointer;
+  transition: background 0.1s;
+  white-space: nowrap;
+}
+.ctx-item:hover { background: var(--bg3); color: var(--black); }
+.ctx-item .ctx-icon { font-size: 15px; width: 20px; text-align: center; }
+.ctx-item .ctx-label { flex: 1; }
+.ctx-item .ctx-hint { font-size: 10px; color: var(--text3); }
+
+/* 캡처 중 flash 효과 */
+.tcard.capturing {
+  outline: 2.5px solid var(--black);
+  outline-offset: -2px;
+}
 </style>
 </head>
 <body>
@@ -297,6 +345,20 @@ tbody tr.computed-row td.td-summary { background: var(--bg3); }
   </div>
 </div>
 
+<!-- ── Context Menu ──────────────────────── -->
+<div class="ctx-menu" id="ctxMenu">
+  <div class="ctx-item" id="ctxScreenshot" onclick="doScreenshot()">
+    <span class="ctx-icon">📸</span>
+    <span class="ctx-label">스크린샷 복사</span>
+    <span class="ctx-hint">클립보드</span>
+  </div>
+  <div class="ctx-item" id="ctxDownload" onclick="doScreenshotDownload()">
+    <span class="ctx-icon">⬇️</span>
+    <span class="ctx-label">이미지로 저장</span>
+    <span class="ctx-hint">.png</span>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -308,7 +370,7 @@ const ENH_NAMES = [
   'Journey_03032026_Enhanced Abandon Cart_Kakao_SS_KR',
   'UAT_Journey_03032026_Enhanced Abandon Cart_Kakao_SS_KR',
 ];
-const EXCLUDE_KEYWORDS = ['test','sit'];          // UAT_Journey is allowed
+const EXCLUDE_KEYWORDS = ['test','sit'];
 
 const METRICS = [
   { key:'total',   label:'총 건수',        computed:true  },
@@ -316,19 +378,125 @@ const METRICS = [
   { key:'fail',    label:'발송 실패',       computed:false },
   { key:'rate',    label:'발송 성공률 (%)', computed:true  },
   { key:'conv',    label:'전환 수',         computed:false, editable:true },
-  { key:'rev',     label:'전환 매출',  computed:false, editable:true },
+  { key:'rev',     label:'전환 매출',       computed:false, editable:true },
 ];
 
 // ══════════════════════════════════════════════════════════
 //  State
 // ══════════════════════════════════════════════════════════
-let rawFiles  = { std: null, enh: null };
+let rawFiles   = { std: null, enh: null };
 let parsedRows = { std: [], enh: [] };
-let weekStore  = {};   // weekStore[type][weekLabel] = {success,fail,conv,rev}
-let weekLabels = [];   // ordered
-let monthMap   = {};   // monthMap[YYYY-MM] = [weekLabel, ...]
-let activeMonth = null;
-let selectedWeeks = null; // null = all selected
+let weekStore  = {};
+let weekLabels = [];
+let monthMap   = {};
+let activeMonth   = null;
+let selectedWeeks = null;
+
+// ── Context menu state ────────────────────
+let ctxTargetCard = null;  // 우클릭된 .tcard 요소
+
+// ══════════════════════════════════════════════════════════
+//  Context Menu — Right-click on .tcard
+// ══════════════════════════════════════════════════════════
+document.addEventListener('contextmenu', e => {
+  const card = e.target.closest('.tcard');
+  if (!card) return;           // tcard 밖이면 기본 동작 유지
+  e.preventDefault();
+  ctxTargetCard = card;
+  showCtxMenu(e.clientX, e.clientY);
+});
+
+document.addEventListener('click', () => hideCtxMenu());
+document.addEventListener('scroll', () => hideCtxMenu(), true);
+document.addEventListener('keydown', e => { if (e.key === 'Escape') hideCtxMenu(); });
+
+function showCtxMenu(x, y) {
+  const menu = document.getElementById('ctxMenu');
+  menu.classList.add('visible');
+
+  // 화면 경계 넘지 않게 보정
+  const mw = menu.offsetWidth  || 190;
+  const mh = menu.offsetHeight || 90;
+  const safeX = Math.min(x, window.innerWidth  - mw - 8);
+  const safeY = Math.min(y, window.innerHeight - mh - 8);
+
+  menu.style.left = safeX + 'px';
+  menu.style.top  = safeY + 'px';
+}
+
+function hideCtxMenu() {
+  document.getElementById('ctxMenu').classList.remove('visible');
+}
+
+// ── Capture helpers ───────────────────────
+async function captureCard() {
+  if (!ctxTargetCard) return null;
+  hideCtxMenu();
+
+  // hint 텍스트(::after) 숨기기 위해 클래스 토글
+  ctxTargetCard.classList.add('capturing');
+
+  // input value → 표시 텍스트를 캡처에도 반영
+  // (html2canvas는 input.value를 기본으로 읽으므로 별도 처리 불필요)
+  const canvas = await html2canvas(ctxTargetCard, {
+    backgroundColor: '#ffffff',
+    scale: 2,           // 레티나 해상도
+    useCORS: true,
+    logging: false,
+    // input 값을 캔버스에 정확히 그리기 위한 옵션
+    onclone: clonedDoc => {
+      clonedDoc.querySelectorAll('input').forEach(inp => {
+        inp.setAttribute('value', inp.value);
+      });
+    }
+  });
+
+  ctxTargetCard.classList.remove('capturing');
+  return canvas;
+}
+
+async function doScreenshot() {
+  hideCtxMenu();
+  try {
+    const canvas = await captureCard();
+    if (!canvas) return;
+
+    canvas.toBlob(async blob => {
+      if (!blob) { showToast('⚠ 캡처 실패'); return; }
+      try {
+        await navigator.clipboard.write([
+          new ClipboardItem({ 'image/png': blob })
+        ]);
+        showToast('📸 스크린샷이 클립보드에 복사됐어요!');
+      } catch {
+        // 클립보드 API 미지원 브라우저 폴백 — 다운로드로 대체
+        downloadCanvas(canvas);
+        showToast('⚠ 클립보드 복사 불가 — 이미지로 저장했어요.');
+      }
+    }, 'image/png');
+  } catch(e) {
+    showToast('⚠ 캡처 중 오류: ' + e.message);
+  }
+}
+
+async function doScreenshotDownload() {
+  hideCtxMenu();
+  try {
+    const canvas = await captureCard();
+    if (!canvas) return;
+    downloadCanvas(canvas);
+    showToast('⬇️ 이미지로 저장됐어요!');
+  } catch(e) {
+    showToast('⚠ 저장 중 오류: ' + e.message);
+  }
+}
+
+function downloadCanvas(canvas) {
+  const a = document.createElement('a');
+  a.download = `abandon_cart_${new Date().toISOString().slice(0,10)}.png`;
+  a.href = canvas.toDataURL('image/png');
+  a.click();
+}
 
 // ══════════════════════════════════════════════════════════
 //  File upload
@@ -347,7 +515,6 @@ function checkParseReady() {
   document.getElementById('parseBtn').disabled = !ready;
 }
 
-// Drag & drop
 ['std','enh'].forEach(t => {
   const dz = document.getElementById(`dz-${t}`);
   dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('drag-over'); });
@@ -364,7 +531,7 @@ function checkParseReady() {
 });
 
 // ══════════════════════════════════════════════════════════
-//  Parse all uploaded files
+//  Parse
 // ══════════════════════════════════════════════════════════
 async function parseAll() {
   document.getElementById('parseBtn').textContent = '분석 중...';
@@ -413,16 +580,11 @@ function parseFile(file, type) {
 
 function filterRows(rows, type) {
   return rows.filter(r => {
-    // Support both settings_name and journey_name column naming
     const sn = (r.settings_name || r.Settings_Name || r.journey_name || r.Journey_Name || '').trim();
     const lower = sn.toLowerCase();
-
-    // Exclude test/sit but NOT UAT_Journey
     const isExcluded = EXCLUDE_KEYWORDS.some(k => lower.includes(k)) &&
                        !sn.startsWith('UAT_Journey');
     if (isExcluded) return false;
-
-    // Type classification by settings_name (lenient match)
     if (type === 'std') {
       return sn === STD_NAME || lower.includes('abandoned_cart');
     } else {
@@ -433,14 +595,13 @@ function filterRows(rows, type) {
 }
 
 // ══════════════════════════════════════════════════════════
-//  Build week structure from actual data
+//  Build weeks
 // ══════════════════════════════════════════════════════════
 function buildWeeks() {
   weekStore  = { std: {}, enh: {} };
   weekLabels = [];
   monthMap   = {};
 
-  // Collect all dates
   const allDates = [];
   ['std','enh'].forEach(t => {
     parsedRows[t].forEach(r => {
@@ -450,7 +611,6 @@ function buildWeeks() {
   });
 
   if (!allDates.length) {
-    // No date data — create dummy single week
     const wl = '데이터 없음';
     weekLabels = [wl];
     monthMap['없음'] = [wl];
@@ -459,32 +619,24 @@ function buildWeeks() {
   }
 
   allDates.sort((a,b) => a-b);
-  const minDate = allDates[0];
-
-  // Week start = minDate (first actual send date)
-  // Groups: [minDate, minDate+7), [minDate+7, minDate+14), ...
   const maxDate = allDates[allDates.length-1];
   const weeks = [];
-  let cursor = new Date(minDate);
+  let cursor = new Date(allDates[0]);
   while (cursor <= maxDate) {
     const end = new Date(cursor); end.setDate(end.getDate()+6);
     weeks.push({ start: new Date(cursor), end });
     cursor.setDate(cursor.getDate()+7);
   }
 
-  // Assign label per week
   weeks.forEach(w => {
     const label = weekLabel(w.start, w.end);
     weekLabels.push(label);
-    // Month key
     const mk = `${w.start.getFullYear()}-${String(w.start.getMonth()+1).padStart(2,'0')}`;
     if (!monthMap[mk]) monthMap[mk] = [];
     monthMap[mk].push(label);
-    // Init store
     ['std','enh'].forEach(t => weekStore[t][label] = {success:0,fail:0,conv:0,rev:0});
   });
 
-  // Aggregate rows
   ['std','enh'].forEach(type => {
     parsedRows[type].forEach(r => {
       const d = parseDate(r.req_dt || r.Req_Dt || r.date || '');
@@ -502,7 +654,6 @@ function buildWeeks() {
 function weekLabel(start, end) {
   const ms = start.getMonth()+1, ds = start.getDate();
   const me = end.getMonth()+1,   de = end.getDate();
-  // Which week of month (1~5)
   const weekNum = Math.ceil(ds / 7);
   const weekNames = ['1주차','2주차','3주차','4주차','5주차'];
   const wn = weekNames[weekNum-1] || `${weekNum}주차`;
@@ -511,14 +662,12 @@ function weekLabel(start, end) {
 
 function parseDate(str) {
   if (!str) return null;
-  // Handle numeric timestamps like 20260313100023 (YYYYMMDDHHmmss)
   const num = String(str).trim().replace(/[^0-9]/g, '');
   if (num.length >= 8) {
     const y = num.slice(0,4), mo = num.slice(4,6), d = num.slice(6,8);
     const date = new Date(+y, +mo-1, +d);
     if (!isNaN(date)) return date;
   }
-  // Handle YYYY-MM-DD or YYYY/MM/DD
   const s = String(str).trim().replace(/\//g,'-');
   const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (!m) return null;
@@ -526,26 +675,23 @@ function parseDate(str) {
 }
 
 // ══════════════════════════════════════════════════════════
-//  Render report
+//  Render
 // ══════════════════════════════════════════════════════════
 function renderReport() {
-  // Month tabs
   const months = Object.keys(monthMap).sort();
   activeMonth  = months[0];
   const tabRow = document.getElementById('tabRow');
   tabRow.innerHTML = months.map(m => {
-    const [y,mo] = m.split('-');
+    const [,mo] = m.split('-');
     return `<button class="tab ${m===activeMonth?'active':''}"
       onclick="switchMonth('${m}',this)">${mo}월</button>`;
   }).join('');
-
   renderMonth();
 }
 
 function renderMonth() {
   const allWeeks = monthMap[activeMonth] || [];
-  selectedWeeks = new Set(allWeeks); // all selected by default
-
+  selectedWeeks = new Set(allWeeks);
   renderWeekFilter(allWeeks);
   renderTables(allWeeks);
 }
@@ -553,10 +699,8 @@ function renderMonth() {
 function renderWeekFilter(allWeeks) {
   const row = document.getElementById('weekFilterRow');
   if (allWeeks.length <= 1) { row.innerHTML = ''; return; }
-
   row.innerHTML = `<span class="week-filter-label">주차 필터</span>` +
     allWeeks.map(w => {
-      // Extract short label like "1주차" from full label
       const short = w.match(/(\d+주차)/)?.[1] || w;
       return `<button class="week-chip selected" data-week="${w}" onclick="toggleWeek(this,'${w}')">${short}</button>`;
     }).join('');
@@ -564,7 +708,6 @@ function renderWeekFilter(allWeeks) {
 
 function toggleWeek(el, week) {
   if (selectedWeeks.has(week)) {
-    // Don't allow deselecting all
     if (selectedWeeks.size === 1) return;
     selectedWeeks.delete(week);
     el.classList.remove('selected');
@@ -573,27 +716,21 @@ function toggleWeek(el, week) {
     el.classList.add('selected');
   }
   const allWeeks = monthMap[activeMonth] || [];
-  const filtered = allWeeks.filter(w => selectedWeeks.has(w));
-  renderTables(filtered);
+  renderTables(allWeeks.filter(w => selectedWeeks.has(w)));
 }
 
 function renderTables(weeks) {
   const body = document.getElementById('reportBody');
   body.innerHTML = '';
-
   ['std','enh'].forEach(type => {
-    const title = type === 'std' ? 'Standard Abandon Cart' : 'Enhanced Abandon Cart';
     const badge = type === 'std'
       ? '<span class="drop-badge badge-std">Standard</span>'
       : '<span class="drop-badge badge-enh">Enhanced</span>';
-
+    const title = type === 'std' ? 'Standard Abandon Cart' : 'Enhanced Abandon Cart';
     const div = document.createElement('div');
     div.className = 'tcard';
     div.innerHTML = `
-      <div class="tcard-head">
-        ${badge}
-        <h3>${title}</h3>
-      </div>
+      <div class="tcard-head">${badge}<h3>${title}</h3></div>
       <div class="scroll-x">${buildTable(type, weeks)}</div>
     `;
     body.appendChild(div);
@@ -613,7 +750,7 @@ function buildTable(type, weeks) {
     const trClass = isComp ? 'computed-row' : '';
     const tdLabelClass = isComp ? 'computed-label' : '';
 
-    const cells = weeks.map((w,wi) => {
+    const cells = weeks.map(w => {
       const raw = weekStore[type][w];
       const val = getCellValue(m.key, raw);
       const fv  = formatVal(m.key, val);
@@ -648,15 +785,12 @@ function buildTable(type, weeks) {
       </div></td>`;
     }).join('');
 
-    // Summary (Total / Average) — skip for 발송 성공률
     let totalCell, avgCell;
     if (m.key === 'rate') {
       totalCell = `<td class="td-summary"><div class="cell-wrap">
         <input class="cell-input summary-input empty" readonly value="" placeholder="–">
       </div></td>`;
-      avgCell = `<td class="td-summary"><div class="cell-wrap">
-        <input class="cell-input summary-input empty" readonly value="" placeholder="–">
-      </div></td>`;
+      avgCell = totalCell;
     } else {
       const nums = weeks.map(w => {
         const v = getCellValue(m.key, weekStore[type][w]);
@@ -664,24 +798,20 @@ function buildTable(type, weeks) {
       });
       const total = nums.reduce((a, b) => a + b, 0);
       const avg   = weeks.length > 0 ? Math.round(total / weeks.length) : 0;
-      const fTotal = formatVal(m.key, total);
-      const fAvg   = formatVal(m.key, avg);
 
       totalCell = `<td class="td-summary"><div class="cell-wrap">
-        <input class="cell-input summary-input" readonly value="${fTotal}"
+        <input class="cell-input summary-input" readonly value="${formatVal(m.key, total)}"
           data-summary-type="${type}" data-summary-metric="${m.key}" data-summary-stat="total">
       </div></td>`;
       avgCell = `<td class="td-summary"><div class="cell-wrap">
-        <input class="cell-input summary-input" readonly value="${fAvg}"
+        <input class="cell-input summary-input" readonly value="${formatVal(m.key, avg)}"
           data-summary-type="${type}" data-summary-metric="${m.key}" data-summary-stat="avg">
       </div></td>`;
     }
 
     return `<tr class="${trClass}">
       <td class="${tdLabelClass}">${m.label}</td>
-      ${cells}
-      ${totalCell}
-      ${avgCell}
+      ${cells}${totalCell}${avgCell}
     </tr>`;
   }).join('');
 
@@ -701,19 +831,17 @@ function getCellValue(key, raw) {
 function formatVal(key, val) {
   if (val===''||val==null) return '';
   if (key==='rate') return val+'%';
-  if (key==='rev') return '₩'+Number(val).toLocaleString('ko-KR');
+  if (key==='rev')  return '₩'+Number(val).toLocaleString('ko-KR');
   return Number(val).toLocaleString('ko-KR');
 }
 
 function cellClass(key, val, editable, computed) {
   let c = '';
-  if (!computed && !editable) c = '';
   if (computed && key==='rate') {
-    if (val==='') c += ' empty';
-    else if (val>=50) c += ' rate-good';
-    else if (val>=30) c += ' rate-mid';
-    else c += ' rate-low';
-    return c.trim();
+    if (val==='') return 'empty';
+    if (val>=50)  return 'rate-good';
+    if (val>=30)  return 'rate-mid';
+    return 'rate-low';
   }
   if (val===''||val==null) c += ' empty';
   return c.trim();
@@ -739,43 +867,34 @@ function onEditableInput(input) {
 
 function refreshComputedRow(type, week) {
   const raw = weekStore[type][week];
-  const table = [...document.querySelectorAll('table')].find(tbl => {
-    const inp = tbl.querySelector(`[data-type="${type}"][data-week="${week}"]`);
-    return !!inp;
-  });
+  const table = [...document.querySelectorAll('table')].find(tbl =>
+    !!tbl.querySelector(`[data-type="${type}"][data-week="${week}"]`)
+  );
   if (!table) return;
-
-  const totalRow = table.querySelectorAll('tbody tr')[0];  // total is first
-  const rateRow  = table.querySelectorAll('tbody tr')[3];  // rate is 4th
-
-  // find column index for this week
-  const headers = [...table.querySelectorAll('thead th')];
-  const colIdx = headers.findIndex(h => h.textContent.trim() === week);
+  const totalRow = table.querySelectorAll('tbody tr')[0];
+  const rateRow  = table.querySelectorAll('tbody tr')[3];
+  const headers  = [...table.querySelectorAll('thead th')];
+  const colIdx   = headers.findIndex(h => h.textContent.trim() === week);
   if (colIdx < 0) return;
 
   const totalVal = (raw.success||0)+(raw.fail||0);
   const rateVal  = totalVal>0 ? +((raw.success||0)/totalVal*100).toFixed(1) : '';
 
-  const totalInput = totalRow.querySelectorAll('td')[colIdx]?.querySelector('input');
-  const rateInput  = rateRow.querySelectorAll('td')[colIdx]?.querySelector('input');
-
-  if (totalInput) { totalInput.value = totalVal||''; }
-  if (rateInput) {
-    rateInput.value = rateVal!=='' ? rateVal+'%' : '';
-    rateInput.className = 'cell-input ' + cellClass('rate', rateVal, false, true);
+  const ti = totalRow.querySelectorAll('td')[colIdx]?.querySelector('input');
+  const ri = rateRow.querySelectorAll('td')[colIdx]?.querySelector('input');
+  if (ti) ti.value = totalVal||'';
+  if (ri) {
+    ri.value = rateVal!=='' ? rateVal+'%' : '';
+    ri.className = 'cell-input ' + cellClass('rate', rateVal, false, true);
   }
 }
 
 function refreshSummaryCells(type) {
-  // Get currently visible weeks from selectedWeeks
   const allWeeks = monthMap[activeMonth] || [];
-  const visWeeks = selectedWeeks
-    ? allWeeks.filter(w => selectedWeeks.has(w))
-    : allWeeks;
+  const visWeeks = selectedWeeks ? allWeeks.filter(w => selectedWeeks.has(w)) : allWeeks;
 
   METRICS.forEach(m => {
     if (m.key === 'rate') return;
-
     const nums = visWeeks.map(w => {
       const v = getCellValue(m.key, weekStore[type][w]);
       return (v !== '' && v != null) ? Number(v) : 0;
@@ -783,14 +902,10 @@ function refreshSummaryCells(type) {
     const total = nums.reduce((a, b) => a + b, 0);
     const avg   = visWeeks.length > 0 ? Math.round(total / visWeeks.length) : 0;
 
-    const totalInput = document.querySelector(
-      `[data-summary-type="${type}"][data-summary-metric="${m.key}"][data-summary-stat="total"]`
-    );
-    const avgInput = document.querySelector(
-      `[data-summary-type="${type}"][data-summary-metric="${m.key}"][data-summary-stat="avg"]`
-    );
-    if (totalInput) totalInput.value = formatVal(m.key, total);
-    if (avgInput)   avgInput.value   = formatVal(m.key, avg);
+    const ti = document.querySelector(`[data-summary-type="${type}"][data-summary-metric="${m.key}"][data-summary-stat="total"]`);
+    const ai = document.querySelector(`[data-summary-type="${type}"][data-summary-metric="${m.key}"][data-summary-stat="avg"]`);
+    if (ti) ti.value = formatVal(m.key, total);
+    if (ai) ai.value = formatVal(m.key, avg);
   });
 }
 
@@ -813,36 +928,30 @@ function doReset() {
   rawFiles = { std: null, enh: null };
   parsedRows = { std: [], enh: [] };
   weekStore = {}; weekLabels = []; monthMap = {}; activeMonth = null;
-
-  document.getElementById('fn-std').textContent = '';
-  document.getElementById('fn-enh').textContent = '';
-  document.getElementById('dz-std').classList.remove('loaded');
-  document.getElementById('dz-enh').classList.remove('loaded');
-  document.getElementById('fi-std').value = '';
-  document.getElementById('fi-enh').value = '';
+  ['std','enh'].forEach(t => {
+    document.getElementById(`fn-${t}`).textContent = '';
+    document.getElementById(`dz-${t}`).classList.remove('loaded');
+    document.getElementById(`fi-${t}`).value = '';
+  });
   document.getElementById('parseBtn').textContent = '리포트 생성하기 →';
   document.getElementById('parseBtn').disabled = true;
   document.getElementById('btnReset').disabled = true;
   document.getElementById('btnCopy').disabled  = true;
   document.getElementById('btnExcel').disabled = true;
-
   showScreen('upload');
 }
 
 function doCopy() {
   const months = Object.keys(monthMap).sort();
   const lines = [];
-
   months.forEach(mo => {
     const [,mm] = mo.split('-');
     lines.push(`\n[${mm}월]`);
     const weeks = monthMap[mo];
-
     ['std','enh'].forEach(type => {
       const title = type==='std' ? 'Standard Abandon Cart' : 'Enhanced Abandon Cart';
       lines.push(`\n  ${title}`);
       lines.push(['지표', ...weeks].join('\t'));
-
       METRICS.forEach(m => {
         const vals = weeks.map(w => {
           const raw = weekStore[type][w];
@@ -856,39 +965,24 @@ function doCopy() {
       });
     });
   });
-
   navigator.clipboard.writeText(lines.join('\n')).then(() => {
     showToast('클립보드에 복사됐어요! 엑셀에 Ctrl+V 붙여넣기 하세요.');
   }).catch(() => showToast('복사 실패 — 브라우저 권한을 확인하세요.'));
 }
 
-// ══════════════════════════════════════════════════════════
-//  Utility
-// ══════════════════════════════════════════════════════════
-function showScreen(s) {
-  document.getElementById('uploadScreen').style.display = s==='upload' ? 'block' : 'none';
-  document.getElementById('reportScreen').style.display = s==='report' ? 'block' : 'none';
-  document.getElementById('actionBar').style.display    = s==='report' ? 'flex'  : 'none';
-}
-
 function doExcel() {
   const wb = XLSX.utils.book_new();
-  const months = Object.keys(monthMap).sort();
-
-  months.forEach(mo => {
+  Object.keys(monthMap).sort().forEach(mo => {
     const [,mm] = mo.split('-');
     const weeks = monthMap[mo];
     const sheetData = [];
-
     ['std','enh'].forEach(type => {
       const title = type==='std' ? 'Standard Abandon Cart' : 'Enhanced Abandon Cart';
       sheetData.push([title]);
       sheetData.push(['지표', ...weeks]);
-
       METRICS.forEach(m => {
         const vals = weeks.map(w => {
-          const raw = weekStore[type][w];
-          const v   = getCellValue(m.key, raw);
+          const v = getCellValue(m.key, weekStore[type][w]);
           if (v===''||v==null) return '–';
           if (m.key==='rate') return v+'%';
           if (m.key==='rev')  return '₩'+Number(v).toLocaleString('ko-KR');
@@ -898,13 +992,20 @@ function doExcel() {
       });
       sheetData.push([]);
     });
-
     const ws = XLSX.utils.aoa_to_sheet(sheetData);
     XLSX.utils.book_append_sheet(wb, ws, `${mm}월`);
   });
-
   XLSX.writeFile(wb, `abandon_cart_report_${new Date().toISOString().slice(0,10)}.xlsx`);
   showToast('엑셀 파일이 다운로드됐어요!');
+}
+
+// ══════════════════════════════════════════════════════════
+//  Utility
+// ══════════════════════════════════════════════════════════
+function showScreen(s) {
+  document.getElementById('uploadScreen').style.display = s==='upload' ? 'block' : 'none';
+  document.getElementById('reportScreen').style.display = s==='report' ? 'block' : 'none';
+  document.getElementById('actionBar').style.display    = s==='report' ? 'flex'  : 'none';
 }
 
 function showToast(msg) {
