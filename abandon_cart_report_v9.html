@@ -1,0 +1,773 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Abandon Cart 성과 트래커</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+:root {
+  --bg: #ffffff;
+  --bg2: #f7f8fa;
+  --bg3: #f2f4f6;
+  --border: #e8eaed;
+  --text: #333333;
+  --text2: #8b8f96;
+  --text3: #bbbec4;
+  --black: #000000;
+  --radius: 16px;
+  --radius-sm: 10px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, 'Apple SD Gothic Neo', 'Pretendard', sans-serif;
+  background: var(--bg2);
+  color: var(--text);
+  font-size: 13px;
+  min-height: 100vh;
+}
+
+/* ── Layout ─────────────────────────────── */
+.page { max-width: 900px; margin: 0 auto; padding: 32px 20px 80px; }
+
+/* ── Header ─────────────────────────────── */
+.header { margin-bottom: 28px; }
+.header h1 { font-size: 20px; font-weight: 800; color: var(--black); margin-bottom: 4px; }
+.header p  { font-size: 12px; color: var(--text2); }
+
+/* ── Action bar ──────────────────────────── */
+.action-bar {
+  display: flex; gap: 8px; margin-bottom: 24px; flex-wrap: wrap;
+}
+.btn {
+  padding: 8px 16px; border-radius: var(--radius-sm);
+  border: 1.5px solid var(--border); background: var(--bg);
+  font-size: 12px; font-weight: 600; color: var(--text);
+  cursor: pointer; font-family: inherit; transition: all 0.12s;
+  display: flex; align-items: center; gap: 5px;
+}
+.btn:hover { background: var(--bg3); border-color: #ccc; }
+.btn.primary { background: var(--black); color: #fff; border-color: var(--black); }
+.btn.primary:hover { background: #333; }
+.btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+/* ── Upload area ─────────────────────────── */
+#uploadScreen { display: block; }
+#reportScreen { display: none; }
+
+.upload-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px;
+}
+@media(max-width:560px){ .upload-grid{ grid-template-columns:1fr; } }
+
+.drop-zone {
+  background: var(--bg);
+  border: 2px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 36px 24px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.15s;
+  position: relative;
+}
+.drop-zone:hover, .drop-zone.drag-over {
+  border-color: #aaa;
+  background: var(--bg3);
+}
+.drop-zone input[type="file"] {
+  position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%;
+}
+.drop-icon { font-size: 28px; margin-bottom: 10px; }
+.drop-title { font-size: 14px; font-weight: 700; color: var(--black); margin-bottom: 4px; }
+.drop-sub   { font-size: 11px; color: var(--text2); line-height: 1.6; }
+.drop-badge {
+  display: inline-block; margin-top: 10px; padding: 3px 10px;
+  border-radius: 6px; font-size: 10px; font-weight: 700;
+}
+.badge-std { background: var(--bg3); color: #555; }
+.badge-enh { background: var(--black); color: #fff; }
+.drop-filename {
+  margin-top: 8px; font-size: 11px; font-weight: 600; color: #34c759;
+}
+.drop-zone.loaded { border-color: #34c759; border-style: solid; }
+
+.parse-btn-wrap { text-align: center; margin-top: 8px; }
+
+.upload-hint {
+  font-size: 11px; color: var(--text3); text-align: center;
+  margin-top: 12px; line-height: 1.7;
+}
+
+/* ── Month tabs ──────────────────────────── */
+.tab-row {
+  display: flex; gap: 6px; margin-bottom: 20px; flex-wrap: wrap;
+}
+.tab {
+  padding: 7px 18px; border-radius: 20px;
+  border: 1.5px solid var(--border); background: var(--bg);
+  font-size: 13px; font-weight: 500; color: var(--text);
+  cursor: pointer; font-family: inherit; transition: all 0.12s;
+}
+.tab.active { background: var(--black); color: #fff; border-color: var(--black); font-weight: 700; }
+
+/* ── Table card ──────────────────────────── */
+.tcard {
+  background: var(--bg);
+  border-radius: var(--radius);
+  overflow: hidden;
+  margin-bottom: 16px;
+  border: 1px solid var(--border);
+}
+.tcard-head {
+  padding: 14px 20px;
+  display: flex; align-items: center; gap: 8px;
+  border-bottom: 1px solid var(--bg3);
+}
+.tcard-head h3 { font-size: 13px; font-weight: 700; color: var(--black); flex: 1; }
+
+.scroll-x { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; min-width: 420px; }
+
+thead th {
+  padding: 9px 16px;
+  text-align: center;
+  font-size: 11px; font-weight: 600; color: var(--text);
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+thead th:first-child { text-align: left; min-width: 110px; }
+
+tbody tr { border-bottom: 1px solid var(--bg3); }
+tbody tr:last-child { border-bottom: none; }
+tbody tr.computed-row { background: var(--bg2); }
+
+tbody td { padding: 0; }
+tbody td:first-child {
+  padding: 0 16px;
+  font-size: 12px; color: var(--text);
+  font-weight: 500; white-space: nowrap;
+  height: 40px; vertical-align: middle;
+}
+tbody td.computed-label { font-style: italic; }
+
+.cell-wrap {
+  height: 40px; display: flex; align-items: center; justify-content: center;
+  padding: 0;
+}
+.cell-input {
+  width: 100%; text-align: center;
+  border: none; border-bottom: 1.5px solid transparent;
+  outline: none; font-size: 13px; font-family: inherit;
+  color: var(--text); background: transparent;
+  padding: 2px 4px 3px; transition: border-color 0.15s;
+}
+.cell-input:not([readonly]):hover { border-bottom-color: var(--border); }
+.cell-input:not([readonly]):focus { border-bottom-color: #aaa; color: var(--black); }
+.cell-input[readonly] { color: var(--text); cursor: default; font-weight: 600; }
+.cell-input.empty { color: var(--text3); }
+.cell-input.rate-good { color: var(--black) !important; font-weight: 700 !important; }
+.cell-input.rate-mid  { color: var(--black) !important; font-weight: 700 !important; }
+.cell-input.rate-low  { color: var(--black) !important; font-weight: 700 !important; }
+.cell-input.editable-special {
+  border-bottom: 1.5px solid transparent;
+  color: var(--text);
+}
+.cell-input.editable-special:focus { border-bottom-color: transparent; }
+
+/* ── Notice ───────────────────────────────── */
+.notice {
+  font-size: 11px; color: var(--text); line-height: 1.9;
+  margin-top: 20px; padding: 16px 20px;
+  background: var(--bg); border-radius: var(--radius);
+  border: 1px solid var(--border);
+}
+.reupload-wrap { margin-top: 20px; display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* ── Toast ───────────────────────────────── */
+.toast {
+  position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%) translateY(60px);
+  background: var(--black); color: #fff;
+  padding: 10px 22px; border-radius: 20px;
+  font-size: 13px; font-weight: 600;
+  transition: transform 0.25s ease, opacity 0.25s;
+  opacity: 0; z-index: 9999; pointer-events: none;
+}
+.toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="header" id="mainHeader">
+    <h1>Abandon Cart 성과 트래커</h1>
+    <p>파일을 업로드하면 Standard / Enhanced 데이터를 자동 분류합니다</p>
+  </div>
+
+  <!-- Action bar (hidden until data loaded) -->
+  <div class="action-bar" id="actionBar" style="display:none;">
+    <button class="btn" id="btnReset"  onclick="doReset()"  disabled>↺ 초기화</button>
+    <button class="btn primary" id="btnCopy" onclick="doCopy()" disabled>복사</button>
+    <button class="btn" id="btnExcel" onclick="doExcel()" disabled>엑셀 다운로드</button>
+  </div>
+
+  <!-- ── UPLOAD SCREEN ─────────────────────── -->
+  <div id="uploadScreen">
+    <div class="upload-grid">
+      <div class="drop-zone" id="dz-std" onclick="document.getElementById('fi-std').click()">
+        <input type="file" id="fi-std" accept=".csv,.xlsx,.xls"
+               onchange="handleFile(this,'std')" onclick="event.stopPropagation()">
+        <div class="drop-icon">📋</div>
+        <div class="drop-title">Standard 파일 업로드</div>
+        <div class="drop-sub">Journey_24022025_Abandoned_Cart_SS_KR<br>.csv / .xlsx</div>
+        <div><span class="drop-badge badge-std">Standard</span></div>
+        <div class="drop-filename" id="fn-std"></div>
+      </div>
+      <div class="drop-zone" id="dz-enh" onclick="document.getElementById('fi-enh').click()">
+        <input type="file" id="fi-enh" accept=".csv,.xlsx,.xls"
+               onchange="handleFile(this,'enh')" onclick="event.stopPropagation()">
+        <div class="drop-icon">✨</div>
+        <div class="drop-title">Enhanced 파일 업로드</div>
+        <div class="drop-sub">Journey_03032026_Enhanced Abandon Cart<br>.csv / .xlsx</div>
+        <div><span class="drop-badge badge-enh">Enhanced</span></div>
+        <div class="drop-filename" id="fn-enh"></div>
+      </div>
+    </div>
+    <div class="parse-btn-wrap">
+      <button class="btn primary" id="parseBtn" onclick="parseAll()" disabled>
+        리포트 생성하기 →
+      </button>
+    </div>
+    <div class="upload-hint">
+      * settings_name 컬럼으로 Standard / Enhanced 자동 구분<br>
+      * test / UAT / SIT 포함 행은 자동 제외 (UAT_Journey_Enhanced는 포함)<br>
+      * req_dt 기준으로 실제 존재하는 월·주차만 표시
+    </div>
+  </div>
+
+  <!-- ── REPORT SCREEN ─────────────────────── -->
+  <div id="reportScreen">
+    <div class="tab-row" id="tabRow"></div>
+    <div id="reportBody"></div>
+
+    <div class="notice" id="reportNotice">
+      * 해당 데이터는 API를 통해 수집되었습니다.<br>
+      ** 일일 발송 성공 10건 미만 시, 오픈/클릭 수치는 제공되지 않습니다.<br>
+      *** 전환 수 / 전환 매출은 직접 입력 가능합니다.
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ══════════════════════════════════════════════════════════
+//  Constants
+// ══════════════════════════════════════════════════════════
+const STD_NAME  = 'Journey_24022025_Abandoned_Cart_SS_KR';
+const ENH_NAMES = [
+  'Journey_03032026_Enhanced Abandon Cart_Kakao_SS_KR',
+  'UAT_Journey_03032026_Enhanced Abandon Cart_Kakao_SS_KR',
+];
+const EXCLUDE_KEYWORDS = ['test','sit'];          // UAT_Journey is allowed
+
+const METRICS = [
+  { key:'total',   label:'총 건수',        computed:true  },
+  { key:'success', label:'발송 성공',       computed:false },
+  { key:'fail',    label:'발송 실패',       computed:false },
+  { key:'rate',    label:'발송 성공률 (%)', computed:true  },
+  { key:'conv',    label:'전환 수',         computed:false, editable:true },
+  { key:'rev',     label:'전환 매출',  computed:false, editable:true },
+];
+
+// ══════════════════════════════════════════════════════════
+//  State
+// ══════════════════════════════════════════════════════════
+let rawFiles  = { std: null, enh: null };
+let parsedRows = { std: [], enh: [] };
+let weekStore  = {};   // weekStore[type][weekLabel] = {success,fail,conv,rev}
+let weekLabels = [];   // ordered
+let monthMap   = {};   // monthMap[YYYY-MM] = [weekLabel, ...]
+let activeMonth = null;
+
+// ══════════════════════════════════════════════════════════
+//  File upload
+// ══════════════════════════════════════════════════════════
+function handleFile(input, type) {
+  const file = input.files[0];
+  if (!file) return;
+  rawFiles[type] = file;
+  document.getElementById(`fn-${type}`).textContent = '✓ ' + file.name;
+  document.getElementById(`dz-${type}`).classList.add('loaded');
+  checkParseReady();
+}
+
+function checkParseReady() {
+  const ready = rawFiles.std || rawFiles.enh;
+  document.getElementById('parseBtn').disabled = !ready;
+}
+
+// Drag & drop
+['std','enh'].forEach(t => {
+  const dz = document.getElementById(`dz-${t}`);
+  dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('drag-over'); });
+  dz.addEventListener('dragleave', () => dz.classList.remove('drag-over'));
+  dz.addEventListener('drop', e => {
+    e.preventDefault(); dz.classList.remove('drag-over');
+    const file = e.dataTransfer.files[0];
+    if (!file) return;
+    rawFiles[t] = file;
+    document.getElementById(`fn-${t}`).textContent = '✓ ' + file.name;
+    dz.classList.add('loaded');
+    checkParseReady();
+  });
+});
+
+// ══════════════════════════════════════════════════════════
+//  Parse all uploaded files
+// ══════════════════════════════════════════════════════════
+async function parseAll() {
+  document.getElementById('parseBtn').textContent = '분석 중...';
+  document.getElementById('parseBtn').disabled = true;
+
+  try {
+    if (rawFiles.std) parsedRows.std = await parseFile(rawFiles.std, 'std');
+    if (rawFiles.enh) parsedRows.enh = await parseFile(rawFiles.enh, 'enh');
+
+    buildWeeks();
+    renderReport();
+    showScreen('report');
+    document.getElementById('btnReset').disabled = false;
+    document.getElementById('btnCopy').disabled  = false;
+    document.getElementById('btnExcel').disabled = false;
+  } catch(e) {
+    showToast('⚠ 파일 분석 중 오류: ' + e.message);
+    document.getElementById('parseBtn').textContent = '리포트 생성하기 →';
+    document.getElementById('parseBtn').disabled = false;
+  }
+}
+
+function parseFile(file, type) {
+  return new Promise((resolve, reject) => {
+    const ext = file.name.split('.').pop().toLowerCase();
+    if (ext === 'csv') {
+      Papa.parse(file, {
+        header: true, skipEmptyLines: true,
+        complete: r => resolve(filterRows(r.data, type)),
+        error: e => reject(e),
+      });
+    } else {
+      const reader = new FileReader();
+      reader.onload = e => {
+        try {
+          const wb = XLSX.read(e.target.result, { type: 'array', cellDates: true });
+          const ws = wb.Sheets[wb.SheetNames[0]];
+          const data = XLSX.utils.sheet_to_json(ws, { raw: false, dateNF: 'yyyy-mm-dd' });
+          resolve(filterRows(data, type));
+        } catch(err) { reject(err); }
+      };
+      reader.readAsArrayBuffer(file);
+    }
+  });
+}
+
+function filterRows(rows, type) {
+  return rows.filter(r => {
+    const sn = (r.settings_name || r.Settings_Name || '').trim();
+    const lower = sn.toLowerCase();
+
+    // Exclude test/sit but NOT UAT_Journey
+    const isExcluded = EXCLUDE_KEYWORDS.some(k => lower.includes(k)) &&
+                       !sn.startsWith('UAT_Journey');
+    if (isExcluded) return false;
+
+    // Type classification by settings_name (lenient match)
+    if (type === 'std') {
+      return sn === STD_NAME || lower.includes('abandoned_cart');
+    } else {
+      return ENH_NAMES.some(n => sn === n) ||
+             lower.includes('enhanced') || lower.includes('uat_journey');
+    }
+  });
+}
+
+// ══════════════════════════════════════════════════════════
+//  Build week structure from actual data
+// ══════════════════════════════════════════════════════════
+function buildWeeks() {
+  weekStore  = { std: {}, enh: {} };
+  weekLabels = [];
+  monthMap   = {};
+
+  // Collect all dates
+  const allDates = [];
+  ['std','enh'].forEach(t => {
+    parsedRows[t].forEach(r => {
+      const d = parseDate(r.req_dt || r.Req_Dt || r.date || '');
+      if (d) allDates.push(d);
+    });
+  });
+
+  if (!allDates.length) {
+    // No date data — create dummy single week
+    const wl = '데이터 없음';
+    weekLabels = [wl];
+    monthMap['없음'] = [wl];
+    ['std','enh'].forEach(t => weekStore[t][wl] = {success:0,fail:0,conv:0,rev:0});
+    return;
+  }
+
+  allDates.sort((a,b) => a-b);
+  const minDate = allDates[0];
+
+  // Week start = minDate (first actual send date)
+  // Groups: [minDate, minDate+7), [minDate+7, minDate+14), ...
+  const maxDate = allDates[allDates.length-1];
+  const weeks = [];
+  let cursor = new Date(minDate);
+  while (cursor <= maxDate) {
+    const end = new Date(cursor); end.setDate(end.getDate()+6);
+    weeks.push({ start: new Date(cursor), end });
+    cursor.setDate(cursor.getDate()+7);
+  }
+
+  // Assign label per week
+  weeks.forEach(w => {
+    const label = weekLabel(w.start, w.end);
+    weekLabels.push(label);
+    // Month key
+    const mk = `${w.start.getFullYear()}-${String(w.start.getMonth()+1).padStart(2,'0')}`;
+    if (!monthMap[mk]) monthMap[mk] = [];
+    monthMap[mk].push(label);
+    // Init store
+    ['std','enh'].forEach(t => weekStore[t][label] = {success:0,fail:0,conv:0,rev:0});
+  });
+
+  // Aggregate rows
+  ['std','enh'].forEach(type => {
+    parsedRows[type].forEach(r => {
+      const d = parseDate(r.req_dt || r.Req_Dt || r.date || '');
+      if (!d) return;
+      const wi = weeks.findIndex(w => d >= w.start && d <= w.end);
+      if (wi < 0) return;
+      const label = weekLabels[wi];
+      const code  = String(r.channel1_f_code ?? r.Channel1_F_Code ?? '').trim();
+      if (code === '0') weekStore[type][label].success++;
+      else              weekStore[type][label].fail++;
+    });
+  });
+}
+
+function weekLabel(start, end) {
+  const ms = start.getMonth()+1, ds = start.getDate();
+  const me = end.getMonth()+1,   de = end.getDate();
+  // Which week of month (1~5)
+  const weekNum = Math.ceil(ds / 7);
+  const weekNames = ['1주차','2주차','3주차','4주차','5주차'];
+  const wn = weekNames[weekNum-1] || `${weekNum}주차`;
+  return `${ms}월 ${wn} (${ms}/${ds}~${me}/${de})`;
+}
+
+function parseDate(str) {
+  if (!str) return null;
+  const s = String(str).trim().replace(/\//g,'-');
+  // Handle YYYYMMDD or YYYY-MM-DD or YYYY-MM-DD HH:MM:SS
+  let m = s.match(/^(\d{4})-?(\d{2})-?(\d{2})/);
+  if (!m) return null;
+  return new Date(+m[1], +m[2]-1, +m[3]);
+}
+
+// ══════════════════════════════════════════════════════════
+//  Render report
+// ══════════════════════════════════════════════════════════
+function renderReport() {
+  // Month tabs
+  const months = Object.keys(monthMap).sort();
+  activeMonth  = months[0];
+  const tabRow = document.getElementById('tabRow');
+  tabRow.innerHTML = months.map(m => {
+    const [y,mo] = m.split('-');
+    return `<button class="tab ${m===activeMonth?'active':''}"
+      onclick="switchMonth('${m}',this)">${mo}월</button>`;
+  }).join('');
+
+  renderMonth();
+}
+
+function renderMonth() {
+  const body  = document.getElementById('reportBody');
+  const weeks = monthMap[activeMonth] || [];
+  body.innerHTML = '';
+
+  ['std','enh'].forEach(type => {
+    const title = type === 'std' ? 'Standard Abandon Cart' : 'Enhanced Abandon Cart';
+    const badge = type === 'std'
+      ? '<span class="drop-badge badge-std">Standard</span>'
+      : '<span class="drop-badge badge-enh">Enhanced</span>';
+
+    const div = document.createElement('div');
+    div.className = 'tcard';
+    div.innerHTML = `
+      <div class="tcard-head">
+        ${badge}
+        <h3>${title}</h3>
+      </div>
+      <div class="scroll-x">${buildTable(type, weeks)}</div>
+    `;
+    body.appendChild(div);
+  });
+}
+
+function buildTable(type, weeks) {
+  const head = `<thead><tr>
+    <th>지표</th>
+    ${weeks.map(w=>`<th>${w}</th>`).join('')}
+  </tr></thead>`;
+
+  const rows = METRICS.map(m => {
+    const isComp = m.computed;
+    const trClass = isComp ? 'computed-row' : '';
+    const tdLabelClass = isComp ? 'computed-label' : '';
+
+    const cells = weeks.map((w,wi) => {
+      const raw = weekStore[type][w];
+      const val = getCellValue(m.key, raw);
+      const fv  = formatVal(m.key, val);
+      const cls = cellClass(m.key, val, m.editable, m.computed);
+
+      if (m.computed) {
+        return `<td><div class="cell-wrap">
+          <input class="cell-input ${cls}" readonly value="${fv}" placeholder="–">
+        </div></td>`;
+      }
+      if (m.editable) {
+        return `<td><div class="cell-wrap">
+          <input class="cell-input editable-special ${!fv?'empty':''}"
+            type="number" min="0"
+            value="${val!==''&&val!=null?val:''}"
+            placeholder="–"
+            data-type="${type}" data-week="${w}" data-metric="${m.key}"
+            oninput="onEditableInput(this)"
+            onfocus="this.classList.remove('empty')"
+            onblur="if(!this.value) this.classList.add('empty')">
+        </div></td>`;
+      }
+      return `<td><div class="cell-wrap">
+        <input class="cell-input ${cls}"
+          type="number" min="0"
+          value="${val!==''&&val!=null?val:''}"
+          placeholder="–"
+          data-type="${type}" data-week="${w}" data-metric="${m.key}"
+          oninput="onInput(this)"
+          onfocus="this.classList.remove('empty')"
+          onblur="if(!this.value) this.classList.add('empty')">
+      </div></td>`;
+    }).join('');
+
+    return `<tr class="${trClass}">
+      <td class="${tdLabelClass}">${m.label}</td>
+      ${cells}
+    </tr>`;
+  }).join('');
+
+  return `<table>${head}<tbody>${rows}</tbody></table>`;
+}
+
+function getCellValue(key, raw) {
+  if (!raw) return '';
+  if (key==='total')   return (raw.success||0)+(raw.fail||0);
+  if (key==='rate') {
+    const t = (raw.success||0)+(raw.fail||0);
+    return t>0 ? +((raw.success||0)/t*100).toFixed(1) : '';
+  }
+  return raw[key] ?? '';
+}
+
+function formatVal(key, val) {
+  if (val===''||val==null) return '';
+  if (key==='rate') return val+'%';
+  if (key==='rev') return '₩'+Number(val).toLocaleString('ko-KR');
+  return Number(val).toLocaleString('ko-KR');
+}
+
+function cellClass(key, val, editable, computed) {
+  let c = '';
+  if (!computed && !editable) c = '';
+  if (computed && key==='rate') {
+    if (val==='') c += ' empty';
+    else if (val>=50) c += ' rate-good';
+    else if (val>=30) c += ' rate-mid';
+    else c += ' rate-low';
+    return c.trim();
+  }
+  if (val===''||val==null) c += ' empty';
+  return c.trim();
+}
+
+// ══════════════════════════════════════════════════════════
+//  Input handlers
+// ══════════════════════════════════════════════════════════
+function onInput(input) {
+  const {type, week, metric} = input.dataset;
+  const v = input.value === '' ? 0 : parseInt(input.value)||0;
+  weekStore[type][week][metric] = v;
+  refreshComputedRow(type, week);
+}
+
+function onEditableInput(input) {
+  const {type, week, metric} = input.dataset;
+  const v = input.value === '' ? 0 : parseFloat(input.value)||0;
+  weekStore[type][week][metric] = v;
+}
+
+function refreshComputedRow(type, week) {
+  const raw = weekStore[type][week];
+  const table = [...document.querySelectorAll('table')].find(tbl => {
+    const inp = tbl.querySelector(`[data-type="${type}"][data-week="${week}"]`);
+    return !!inp;
+  });
+  if (!table) return;
+
+  const totalRow = table.querySelectorAll('tbody tr')[0];  // total is first
+  const rateRow  = table.querySelectorAll('tbody tr')[3];  // rate is 4th
+
+  // find column index for this week
+  const headers = [...table.querySelectorAll('thead th')];
+  const colIdx = headers.findIndex(h => h.textContent.trim() === week);
+  if (colIdx < 0) return;
+
+  const totalVal = (raw.success||0)+(raw.fail||0);
+  const rateVal  = totalVal>0 ? +((raw.success||0)/totalVal*100).toFixed(1) : '';
+
+  const totalInput = totalRow.querySelectorAll('td')[colIdx]?.querySelector('input');
+  const rateInput  = rateRow.querySelectorAll('td')[colIdx]?.querySelector('input');
+
+  if (totalInput) { totalInput.value = totalVal||''; }
+  if (rateInput) {
+    rateInput.value = rateVal!=='' ? rateVal+'%' : '';
+    rateInput.className = 'cell-input ' + cellClass('rate', rateVal, false, true);
+  }
+}
+
+// ══════════════════════════════════════════════════════════
+//  Tab switch
+// ══════════════════════════════════════════════════════════
+function switchMonth(m, el) {
+  activeMonth = m;
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  el.classList.add('active');
+  renderMonth();
+}
+
+// ══════════════════════════════════════════════════════════
+//  Buttons
+// ══════════════════════════════════════════════════════════
+function doReset() {
+  if (!confirm('초기화하면 모든 데이터가 삭제됩니다. 계속할까요?')) return;
+  rawFiles = { std: null, enh: null };
+  parsedRows = { std: [], enh: [] };
+  weekStore = {}; weekLabels = []; monthMap = {}; activeMonth = null;
+
+  document.getElementById('fn-std').textContent = '';
+  document.getElementById('fn-enh').textContent = '';
+  document.getElementById('dz-std').classList.remove('loaded');
+  document.getElementById('dz-enh').classList.remove('loaded');
+  document.getElementById('fi-std').value = '';
+  document.getElementById('fi-enh').value = '';
+  document.getElementById('parseBtn').textContent = '리포트 생성하기 →';
+  document.getElementById('parseBtn').disabled = true;
+  document.getElementById('btnReset').disabled = true;
+  document.getElementById('btnCopy').disabled  = true;
+  document.getElementById('btnExcel').disabled = true;
+
+  showScreen('upload');
+}
+
+function doCopy() {
+  const months = Object.keys(monthMap).sort();
+  const lines = [];
+
+  months.forEach(mo => {
+    const [,mm] = mo.split('-');
+    lines.push(`\n[${mm}월]`);
+    const weeks = monthMap[mo];
+
+    ['std','enh'].forEach(type => {
+      const title = type==='std' ? 'Standard Abandon Cart' : 'Enhanced Abandon Cart';
+      lines.push(`\n  ${title}`);
+      lines.push(['지표', ...weeks].join('\t'));
+
+      METRICS.forEach(m => {
+        const vals = weeks.map(w => {
+          const raw = weekStore[type][w];
+          const v   = getCellValue(m.key, raw);
+          if (v===''||v==null) return '–';
+          if (m.key==='rate') return v+'%';
+          if (m.key==='rev')  return '₩'+Number(v).toLocaleString('ko-KR');
+          return String(v);
+        });
+        lines.push([m.label, ...vals].join('\t'));
+      });
+    });
+  });
+
+  navigator.clipboard.writeText(lines.join('\n')).then(() => {
+    showToast('클립보드에 복사됐어요! 엑셀에 Ctrl+V 붙여넣기 하세요.');
+  }).catch(() => showToast('복사 실패 — 브라우저 권한을 확인하세요.'));
+}
+
+// ══════════════════════════════════════════════════════════
+//  Utility
+// ══════════════════════════════════════════════════════════
+function showScreen(s) {
+  document.getElementById('uploadScreen').style.display = s==='upload' ? 'block' : 'none';
+  document.getElementById('reportScreen').style.display = s==='report' ? 'block' : 'none';
+  document.getElementById('actionBar').style.display    = s==='report' ? 'flex'  : 'none';
+}
+
+function doExcel() {
+  const wb = XLSX.utils.book_new();
+  const months = Object.keys(monthMap).sort();
+
+  months.forEach(mo => {
+    const [,mm] = mo.split('-');
+    const weeks = monthMap[mo];
+    const sheetData = [];
+
+    ['std','enh'].forEach(type => {
+      const title = type==='std' ? 'Standard Abandon Cart' : 'Enhanced Abandon Cart';
+      sheetData.push([title]);
+      sheetData.push(['지표', ...weeks]);
+
+      METRICS.forEach(m => {
+        const vals = weeks.map(w => {
+          const raw = weekStore[type][w];
+          const v   = getCellValue(m.key, raw);
+          if (v===''||v==null) return '–';
+          if (m.key==='rate') return v+'%';
+          if (m.key==='rev')  return '₩'+Number(v).toLocaleString('ko-KR');
+          return v;
+        });
+        sheetData.push([m.label, ...vals]);
+      });
+      sheetData.push([]);
+    });
+
+    const ws = XLSX.utils.aoa_to_sheet(sheetData);
+    XLSX.utils.book_append_sheet(wb, ws, `${mm}월`);
+  });
+
+  XLSX.writeFile(wb, `abandon_cart_report_${new Date().toISOString().slice(0,10)}.xlsx`);
+  showToast('엑셀 파일이 다운로드됐어요!');
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 3000);
+}
+</script>
+</body>
+</html>
