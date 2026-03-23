@@ -143,7 +143,7 @@ body {
 .tcard-head h3 { font-size: 13px; font-weight: 700; color: var(--black); flex: 1; }
 
 .scroll-x { overflow-x: auto; }
-table { width: 100%; border-collapse: collapse; min-width: 420px; }
+table { width: auto; min-width: 100%; border-collapse: collapse; }
 
 thead th {
   padding: 9px 16px;
@@ -152,19 +152,21 @@ thead th {
   background: var(--bg2);
   border-bottom: 1px solid var(--border);
   white-space: nowrap;
+  width: 130px;
 }
-thead th:first-child { text-align: left; min-width: 110px; }
+thead th:first-child { text-align: left; min-width: 130px; width: 130px; }
 
 tbody tr { border-bottom: 1px solid var(--bg3); }
 tbody tr:last-child { border-bottom: none; }
 tbody tr.computed-row { background: var(--bg2); }
 
-tbody td { padding: 0; }
+tbody td { padding: 0; width: 130px; }
 tbody td:first-child {
   padding: 0 16px;
   font-size: 12px; color: var(--text);
   font-weight: 500; white-space: nowrap;
   height: 40px; vertical-align: middle;
+  width: 130px;
 }
 tbody td.computed-label { font-style: italic; }
 
@@ -258,7 +260,7 @@ tbody td.computed-label { font-style: italic; }
     <div class="upload-hint">
       * settings_name 컬럼으로 Standard / Enhanced 자동 구분<br>
       * test / UAT / SIT 포함 행은 자동 제외 (UAT_Journey_Enhanced는 포함)<br>
-      * req_dt 기준으로 실제 존재하는 월·주차만 표시
+      * comp_dt 기준으로 실제 존재하는 월·주차만 표시
     </div>
   </div>
 
@@ -423,7 +425,7 @@ function buildWeeks() {
   const allDates = [];
   ['std','enh'].forEach(t => {
     parsedRows[t].forEach(r => {
-      const d = parseDate(r.req_dt || r.Req_Dt || r.date || '');
+      const d = parseDate(r.comp_dt || r.Comp_Dt || r.req_dt || r.Req_Dt || r.date || '');
       if (d) allDates.push(d);
     });
   });
@@ -466,7 +468,7 @@ function buildWeeks() {
   // Aggregate rows
   ['std','enh'].forEach(type => {
     parsedRows[type].forEach(r => {
-      const d = parseDate(r.req_dt || r.Req_Dt || r.date || '');
+      const d = parseDate(r.comp_dt || r.Comp_Dt || r.req_dt || r.Req_Dt || r.date || '');
       if (!d) return;
       const wi = weeks.findIndex(w => d >= w.start && d <= w.end);
       if (wi < 0) return;
@@ -490,18 +492,28 @@ function weekLabel(start, end) {
 
 function parseDate(str) {
   if (!str) return null;
-  // Handle numeric timestamps like 20260313100023 (YYYYMMDDHHmmss)
-  const num = String(str).trim().replace(/[^0-9]/g, '');
-  if (num.length >= 8) {
-    const y = num.slice(0,4), mo = num.slice(4,6), d = num.slice(6,8);
-    const date = new Date(+y, +mo-1, +d);
-    if (!isNaN(date)) return date;
+
+  let s = String(str).trim();
+
+  // Handle Excel scientific notation like 2.02603E+13
+  if (/^\d+\.?\d*[eE][+\-]?\d+$/.test(s)) {
+    s = Math.round(Number(s)).toString();
   }
+
+  // Handle numeric timestamps like 20260313100023 (YYYYMMDDHHmmss)
+  const num = s.replace(/[^0-9]/g, '');
+  if (num.length >= 8) {
+    const yy = +num.slice(0,4), mm = +num.slice(4,6), dd = +num.slice(6,8);
+    if (yy > 2000 && mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31) {
+      return new Date(yy, mm-1, dd);
+    }
+  }
+
   // Handle YYYY-MM-DD or YYYY/MM/DD
-  const s = String(str).trim().replace(/\//g,'-');
-  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  const m = s.replace(/\//g,'-').match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (!m) return null;
-  return new Date(+m[1], +m[2]-1, +m[3]);
+  const date = new Date(+m[1], +m[2]-1, +m[3]);
+  return isNaN(date) ? null : date;
 }
 
 // ══════════════════════════════════════════════════════════
