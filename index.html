@@ -99,6 +99,22 @@ body {
   margin-top: 12px; line-height: 1.7;
 }
 
+/* ── Week filter ─────────────────────────── */
+.week-filter-row {
+  display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; align-items: center;
+}
+.week-filter-label {
+  font-size: 11px; font-weight: 600; color: var(--text2); margin-right: 2px;
+}
+.week-chip {
+  padding: 5px 14px; border-radius: 20px;
+  border: 1.5px solid var(--border); background: var(--bg);
+  font-size: 12px; font-weight: 500; color: var(--text);
+  cursor: pointer; font-family: inherit; transition: all 0.12s;
+}
+.week-chip:hover { background: var(--bg3); border-color: #ccc; }
+.week-chip.selected { background: var(--black); color: #fff; border-color: var(--black); font-weight: 700; }
+
 /* ── Month tabs ──────────────────────────── */
 .tab-row {
   display: flex; gap: 6px; margin-bottom: 20px; flex-wrap: wrap;
@@ -249,6 +265,7 @@ tbody td.computed-label { font-style: italic; }
   <!-- ── REPORT SCREEN ─────────────────────── -->
   <div id="reportScreen">
     <div class="tab-row" id="tabRow"></div>
+    <div class="week-filter-row" id="weekFilterRow"></div>
     <div id="reportBody"></div>
 
     <div class="notice" id="reportNotice">
@@ -290,6 +307,7 @@ let weekStore  = {};   // weekStore[type][weekLabel] = {success,fail,conv,rev}
 let weekLabels = [];   // ordered
 let monthMap   = {};   // monthMap[YYYY-MM] = [weekLabel, ...]
 let activeMonth = null;
+let selectedWeeks = null; // null = all selected
 
 // ══════════════════════════════════════════════════════════
 //  File upload
@@ -504,8 +522,42 @@ function renderReport() {
 }
 
 function renderMonth() {
-  const body  = document.getElementById('reportBody');
-  const weeks = monthMap[activeMonth] || [];
+  const allWeeks = monthMap[activeMonth] || [];
+  selectedWeeks = new Set(allWeeks); // all selected by default
+
+  renderWeekFilter(allWeeks);
+  renderTables(allWeeks);
+}
+
+function renderWeekFilter(allWeeks) {
+  const row = document.getElementById('weekFilterRow');
+  if (allWeeks.length <= 1) { row.innerHTML = ''; return; }
+
+  row.innerHTML = `<span class="week-filter-label">주차 필터</span>` +
+    allWeeks.map(w => {
+      // Extract short label like "1주차" from full label
+      const short = w.match(/(\d+주차)/)?.[1] || w;
+      return `<button class="week-chip selected" data-week="${w}" onclick="toggleWeek(this,'${w}')">${short}</button>`;
+    }).join('');
+}
+
+function toggleWeek(el, week) {
+  if (selectedWeeks.has(week)) {
+    // Don't allow deselecting all
+    if (selectedWeeks.size === 1) return;
+    selectedWeeks.delete(week);
+    el.classList.remove('selected');
+  } else {
+    selectedWeeks.add(week);
+    el.classList.add('selected');
+  }
+  const allWeeks = monthMap[activeMonth] || [];
+  const filtered = allWeeks.filter(w => selectedWeeks.has(w));
+  renderTables(filtered);
+}
+
+function renderTables(weeks) {
+  const body = document.getElementById('reportBody');
   body.innerHTML = '';
 
   ['std','enh'].forEach(type => {
@@ -663,6 +715,7 @@ function refreshComputedRow(type, week) {
 // ══════════════════════════════════════════════════════════
 function switchMonth(m, el) {
   activeMonth = m;
+  selectedWeeks = null;
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   el.classList.add('active');
   renderMonth();
